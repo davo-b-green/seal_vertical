@@ -37,32 +37,33 @@ dive <- DNid(dive) # run through the function
 Ok, now that we have an indicator of hours to midnight, we'll try to fit a nonlinear regression model to estimate nighttime, daytime and midday depths
 
 ```{r}
+
+suppressMessages(
 dive <- dive %>% # create day column for fitting individual nls models
   mutate(t_c = noon - abs(difftime(date, noon, units = "hours"))) %>%
   # mutate(t_c = difftime(noon, abs(difftime(date, noon, units = "hours")))) %>% 
   mutate(day = as.POSIXct(substr(date, 1, 10), tz = "UTC")) %>% 
-  group_by(id) %>% 
-  full_join(data.frame(day = seq.POSIXt(min(.$day),
-                                         max(.$day),
+  group_split(id) %>%
+  lapply(., function(x){
+    x_days = data.frame(day = seq.POSIXt(min(x$day),
+                                         max(x$day),
                                          by = "day"),
-                        id = .$id[1]) %>% 
-               mutate(n_day = row_number(.))
-             )
-
-  # # group_by(id) %>% 
-  # group_split(id) %>% 
-  # lapply(., function(x){
-  #   x_days = data.frame(day = seq.POSIXt(min(x$day),
-  #                                        max(x$day),
+                        id = x$id[1]) %>%
+      mutate(n_day = row_number(.))
+    
+      x = x %>%
+        full_join(x_days)
+    
+    return(x)
+  }) %>% bind_rows()
+)
+  # group_by(id) %>% 
+  # full_join(data.frame(day = seq.POSIXt(min(.$day),
+  #                                        max(.$day),
   #                                        by = "day"),
-  #                       id = x$id[1]) %>% 
-  #     mutate(n_day = row_number(.))
-  #   
-  #   x = x %>% 
-  #     full_join(x_days)
-  #   return(x)
-  # }) %>% bind_rows()
-
+  #                       id = .$id[1]) %>% 
+  #              mutate(n_day = row_number(.))
+  #            )
 # dive %>% 
 #   ggplot(aes(x = day,
 #              y = max_dep)) + 
@@ -235,6 +236,14 @@ for(jj in  unique(dive$id)){
 }
 
 ```
+```{r}
+{
+  par(mfrow = c(2,1))
+  hist(fits_sum$D_diff_start[between(fits_sum$D_diff_start, -500, 1000)], breaks = seq(-500, 1000, 50))
+  hist(fits_sum$D_diff[between(fits_sum$D_diff, -500, 1000)], breaks = seq(-500, 1000, 50))
+}
+```
+
 Save sumary output
 ```{r}
 
