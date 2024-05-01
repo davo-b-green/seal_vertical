@@ -42,18 +42,31 @@ dive <- dive %>% # create day column for fitting individual nls models
   # mutate(t_c = difftime(noon, abs(difftime(date, noon, units = "hours")))) %>% 
   mutate(day = as.POSIXct(substr(date, 1, 10), tz = "UTC")) %>% 
   group_by(id) %>% 
-  right_join(data.frame(day = seq.POSIXt(min(.$day),
+  full_join(data.frame(day = seq.POSIXt(min(.$day),
                                          max(.$day),
                                          by = "day"),
-                        id = .$id) %>% 
+                        id = .$id[1]) %>% 
                mutate(n_day = row_number(.))
              )
 
-dive %>% 
-  mutate(day = as.POSIXct(day, tz = "UTC")) %>% 
-  ggplot(aes(x = day,
-             y = max_dep)) + 
-  geom_point()
+  # # group_by(id) %>% 
+  # group_split(id) %>% 
+  # lapply(., function(x){
+  #   x_days = data.frame(day = seq.POSIXt(min(x$day),
+  #                                        max(x$day),
+  #                                        by = "day"),
+  #                       id = x$id[1]) %>% 
+  #     mutate(n_day = row_number(.))
+  #   
+  #   x = x %>% 
+  #     full_join(x_days)
+  #   return(x)
+  # }) %>% bind_rows()
+
+# dive %>% 
+#   ggplot(aes(x = day,
+#              y = max_dep)) + 
+#   geom_point()
 
 ```
 
