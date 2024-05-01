@@ -61,25 +61,12 @@ Creating an example test, also used to create some template outputs
 
 ```{r}
 
-
-  
-# plot(dive$day, dive$max_dep)
 # trying with one individual, and for one day
 dive_sub <- dive %>% 
   # filter(id %in% unique(id)[4]) %>% 
   filter(id %in% "ct160-336-20") %>% 
   filter(day %in% unique(day)[70:70])
 
-# {par(mfrow = c(1,2))
-# plot(dive_sub$hrs_to_noon, dive_sub$max_dep)
-# plot(dive_sub$sol_pos, dive_sub$max_dep)
-# }
-# plot(dive_sub$date, dive_sub$max_dep)
-# fit <- nlrob(max_dep ~ hrs_to_midnight, data = dive_sub)
-
-# fit <- nlrob(max_dep ~ (D_n + (D_d - D_n))/(1-exp(as.numeric(difftime(t_m,t_c, units = "hours"))/lamd)),
-#              data = dive_sub,
-#              start = c(D_n = 100, D_d = 500, t_m = ))
 
 # Starting depths
 
@@ -94,9 +81,6 @@ if(any(dive_sub$diel == "day")){ # if day dives available
 }else{
     D_d <- median(dive_sub$max_dep[dive_sub$diel %in% c("dawn", "dusk")], na.rm = T) # if only twilight dives available
   }
-
-# D_n <- median(dive_sub$max_dep[dive_sub$diel == "night"], na.rm = T)
-# D_d <- median(dive_sub$max_dep[dive_sub$diel == "day"], na.rm = T)
 
 # Try with distance from noon
 # 
@@ -127,12 +111,11 @@ fit_sol <- nlrob(max_dep ~ D_n + (D_d - D_n)/(1+exp((sol_mid - sol_pos)/lamd_sol
              algorithm = "port",
              maxit = 500)
 
+# Creating a template output of model parameter summary
 fit_dat <- as.data.frame(summary(fit_sol)$coefficients) %>% 
   rownames_to_column() %>% 
   pivot_wider(names_from = rowname,
               values_from = -rowname)
-
-# summary(fit_sol)
 
 
 # Creating generic output if test fails to converge
@@ -145,7 +128,7 @@ out_fail <- fit_dat %>%
 
 ```
 
-Now, let's try iterating across the whole dataset for a single individual
+Now, let's try iterating across the whole dataset
 ```{r}
 
 fits_sum <- out_fail[0,]
@@ -238,6 +221,11 @@ for(jj in  unique(dive$id)){
   }
 }
 
+```
+Save sumary output
+```{r}
+
+fwrite(fits_sum, "test_outputs/robust_nls_parameter_fits.csv")
 ```
 
 
