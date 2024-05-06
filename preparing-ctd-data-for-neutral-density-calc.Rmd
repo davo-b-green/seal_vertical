@@ -103,7 +103,7 @@ Viewing output from the calc
 
 n_dens <- readMat("../Data/neutral_density/ses_vertical/ctd_profiles_seal-ct164-502-21-gamma.mat")
 
-```
+<!-- ``` -->
 
 Convert data into netcdf
 
