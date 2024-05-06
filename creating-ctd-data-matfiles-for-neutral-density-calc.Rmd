@@ -1,0 +1,115 @@
+---
+title: "Prepping latest MEOP release datasets for neutral density estimation"
+author: "David Green"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(terra)
+library(ncdf4)
+library(stars)
+library(sf)
+library(tidyverse)
+library(sfheaders)
+library(fs)
+library(tidync)
+library(ncmeta)
+library(cmocean)
+library(R.matlab)
+```
+
+Noting that here we're only looking at elephant and Weddell seals
+```{r}
+
+species_of_interest <- c("Southern elephant seal", "Weddell seal")
+
+species_abbr <- c("ses", "ws")
+
+out_dir <- "../Data/matfiles_neutral_density_calc"
+dir_create(out_dir)
+```
+
+```{r cars}
+
+ctd_files <- dir_ls("../Data/IMOS_MEOP_QC/MEOP_2024-03-08/", glob = "*all_prof.nc", recurse = TRUE)
+
+suppressMessages(
+all_profs_long <- lapply(ctd_files, function(ctdfile){
+  # ctdfile <- "AUSTRALIA/DATA/ct85-254-12_all_prof.nc"
+  
+  con <- tidync(ctdfile) # read in netcdf data
+  trace_id <- which(ctd_files == ctdfile)
+  conattr <- nc_atts(ctdfile) # read in attribute data
+  id <- conattr$value$smru_platform_code # scrub platform id
+  species <- conattr$value$species # scrub species id
+  cat("\r processing seal id: ", id, "  (", trace_id,")              ")
+  
+  nc_vals <- con %>% # activate grid with profile data
+    activate("D12,D8") %>%
+    hyper_array()
+    
+  pres <- nc_vals$PRES_INTERP #%>% as.double() # get vector of pressure (depths)
+
+  if(species %in% species_of_interest &
+     !is.na(ncol(pres))){
+  
+
+    
+    mode(pres) <- "double"
+    
+    temp <- nc_vals$TEMP_INTERP # get matrix of temperatures
+    
+    colnames(temp) <- attr(nc_vals, "transforms")$N_PROF$N_PROF %>% as.character()
+  
+  
+    sal <- nc_vals$PSAL_INTERP # get matrix of salinities
+    
+    colnames(sal) <- attr(nc_vals, "transforms")$N_PROF$N_PROF %>% as.character()
+    
+    
+    loc_time <- con %>% # get location information
+      activate("D8") %>% 
+      hyper_array()
+    
+    lon <- loc_time$LONGITUDE %>% as.double() # extract longitude
+    lon <- lon[1:ncol(pres)]
+    
+    lon <- matrix(lon, 
+                  nrow = nrow(pres),
+                  ncol = length(lon),
+                  byrow = TRUE)
+    
+    lat <- loc_time$LATITUDE %>% as.double() # extract latitude
+    lat <- lat[1:ncol(pres)]
+    
+    lat <- matrix(lat, 
+                  nrow = nrow(pres),
+                  ncol = length(lat),
+                  byrow = TRUE)
+    # date <- as.numeric(loc_time$JULD)*24*60*60 
+    # date <- date %>% as.POSIXct(origin = as.POSIXct("1950-01-01 00:00:00", tz = "UTC"), tz = "UTC")
+    # 
+    # n_profile <- attr(nc_vals, "transforms")$N_PROF$N_PROF %>% as.character()
+    # 
+    # loc_date <- data.frame(n_profile, date, lon, lat, species)
+    # 
+    # temp_sal <- temp_sal %>% 
+    #   left_join(loc_date) %>% 
+    #   # na.omit()
+    #   filter_at(vars(temp,sal),any_vars(!is.na(.)))
+    save_abbr <- species_abbr[species_of_interest == species]
+    writeMat(paste0(out_dir,"/ctd_profiles_",save_abbr,"_",id,".mat"), 
+             temperature = temp, 
+             salinity = sal, 
+             p = pres, 
+             lat = lat, 
+             lon = lon)
+  }
+})
+)
+# all_profs_long <- bind_rows(all_profs_long)
+# 
+# data.table::fwrite(all_profs_long, "../../Data/CTD_profiles/previous_MEOP_release/all_previous_MEOP_ctd_profiles_interp_long.csv")
+
+```
