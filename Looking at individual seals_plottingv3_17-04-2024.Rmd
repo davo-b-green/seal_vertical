@@ -1,0 +1,490 @@
+---
+title: "Exploring individual seal dive depths for Prydz Bay region foragers"
+author: "David Green"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(data.table)
+library(terra)
+library(readxl)
+library(ggnewscale)
+```
+
+Ok, first let's map some tracks and identify some seals to plot up
+```{r}
+meta <- read_xlsx("../../seaTracks/IMOS_CTD_metadata_14032024.xlsx") %>% 
+  select(SMRU_Ref, Location, Species, Sex, AgeClass) %>% 
+  rename(id = SMRU_Ref) %>% 
+  rename_with(.fn = tolower) %>% 
+  distinct()
+
+meta2 <- fread("../../seaTracks/clive_metadata.csv")
+
+meta <- bind_rows(meta, meta2) %>% 
+  distinct() %>% 
+  mutate(sex = tolower(sex))
+
+campaign_meta <- fread("decade_meta.csv") %>% 
+  select(campaign, deployed, species) %>% 
+  mutate(species = case_when(species == "ws" ~ "Leptonychotes weddellii",
+                             species == "ses" ~ "Mirounga leonina"),
+         location = case_when(deployed == "mi" ~ "Macquarie Island",
+                              deployed == "ki" ~ "Iles Kerguelen",
+                              deployed == "dv" ~ "Dumont d'Urville",
+                              deployed == "ca" ~ "Casey")) %>% 
+  select(-deployed) %>% 
+  distinct()
+
+locs <- fread("../../seaTracks/processed_datasets/loc_ssm_6h.csv", 
+              select = c("id", "lon", "lat", "date")) %>%
+  left_join(meta)
+
+locs_sum <- locs %>% 
+  group_by(id) %>% 
+  summarise(date = first(date), 
+            lon = first(lon), 
+            lat = first(lat), 
+            species = first(species),
+            location = first(location)
+            ) %>% 
+  rowwise() %>% 
+  mutate(campaign = str_split(id, pattern = "-")[[1]][1])
+
+locs_sum <- left_join(locs_sum, campaign_meta, by = "campaign") %>% 
+  mutate(species = coalesce(species.x, species.y),
+         location = coalesce(location.x, location.y)) %>% 
+  select(id, species, location)
+
+locs <- locs %>% 
+  select(-c(species, location)) %>% 
+  left_join(locs_sum) %>% 
+  filter(species == "Mirounga leonina",
+         location == "Iles Kerguelen")
+
+# locs <- locs %>%
+#   group_by(id) %>% 
+#   mutate(antarctic = case_when((sum(lat < -60, na.rm = T)/n()) > 0.5 ~ "yes", TRUE ~ "no"),
+#          prydz = case_when((sum(lon > 65 & lon < 85, na.rm = T)/n()) > 0.5 ~ "yes", TRUE ~ "no")
+#     ) %>% 
+#   filter(antarctic == "yes",
+#          prydz == "yes") 
+```
+
+Looking at a plot
+
+```{r}
+xlim = range(locs$lon, na.rm = T)
+ylim = range(locs$lat, na.rm = T)
+
+bathy <- rast("../../SMRU Data/bathymetry/SO-bathy-grid_gebco_21.nc")
+bathy <- crop(bathy, ext(xlim[1], xlim[2], ylim[1], ylim[2]))
+
+ids <- locs %>% 
+  pull(id) %>% 
+  unique()
+
+
+for(locs_max in ids){
+xlim = range(locs %>% filter(id == locs_max) %>% pull(lon), na.rm = T)
+ylim = range(locs %>% filter(id == locs_max) %>% pull(lat), na.rm = T)
+
+library(bread)
+
+cat("\r processing seal id: ", locs_max, "         ")
+
+suppressWarnings(
+dive <- tryCatch(
+expr = {bfilter("../Data/processed_datasets/dive_summaries_with-DNid-location-and-season.csv",
+                patterns = c(locs_max),
+                filtered_columns = "id")},
+error = function(e){
+  return(NULL)
+}
+)
+)
+
+if(is.null(dive)){
+  cat("error: no dive data for: ", locs_max, " | skipping to next seal ")
+  
+}
+
+if(is.null(dive))next
+# if(is.null(dive)){cat("error: no dive data for: ", locs_max, " | skipping to next seal ")}next
+
+suppressWarnings(
+ctd <- tryCatch(
+  expr = {
+    if(as.numeric(substr(dive$date[1],1,4))<2018){
+      bfilter("../Data/CTD_profiles/previous_MEOP_release/all_previous_MEOP_ctd_profiles_interp_long.csv",
+              patterns = c(locs_max),
+              filtered_columns = "id")
+      }else{
+        bfilter("../Data/CTD_profiles/new_MEOP_release/all_new_MEOP_ctd_profiles_interp_long.csv",
+                patterns = c(locs_max),
+                filtered_columns = "id")
+      }
+  },
+  error = function(e){
+  return(NULL)
+}
+)
+)
+
+if(is.null(ctd)){
+  cat("error: no ctd data for: ", locs_max, " | skipping to next seal ")
+  
+  }
+if(is.null(ctd))next
+
+ctd_ag <- ctd %>% 
+  mutate(day = substr(date, 1, 10),
+         dep_bin = cut(depth, 
+                       breaks = seq(0, max(depth, na.rm = T), by = 10),
+                       labels = seq(10, max(depth, na.rm = T), by = 10)
+                       )) %>% 
+  group_by(day, dep_bin) %>% 
+  summarise(temp = mean(temp, na.rm = TRUE),
+            sal = mean(sal, na.rm = TRUE)) %>% 
+  mutate(day = as.POSIXct(day, tz = "UTC"),
+         dep_bin = as.numeric(dep_bin)*-10)
+
+library(collapse)
+# dive_r <- dive %>% 
+#   mutate(hourly = cut(date,
+#                       breaks = seq.POSIXt(.$date[1], .$date[length(.$date)], by = "hour"),
+#                       labels = seq.POSIXt(.$date[1], .$date[length(.$date)], by = "hour")[-1]
+#                         )) 
+# 
+# dive_r <- dive_r %>% 
+#   group_by(id, hourly, hunt_bins) %>% 
+#   summarise(hunt_bin_freq = mean(hunt_bin_freq, na.rm = T),
+#             lon = mean(lon, na.rm = T),
+#             lat = mean(lat, na.rm = T),
+#             max_dep = mean(max_dep, na.rm = T),
+#             diel = fmode(diel),
+#             .groups = "drop_last") %>% 
+#   mutate(hourly = as.POSIXct(hourly, tz = "UTC"))
+
+
+library(patchwork)
+library(cmocean)
+# g1 <- ggplot(dive_r) +
+#   geom_point(aes(x = hourly,
+#                   y = hunt_bins*-1,
+#                   colour = scales::oob_squish(hunt_bin_freq, c(0,200))
+#                   ),
+#               show.legend = F) +
+#   scale_fill_viridis_c() +
+#   facet_grid(rows = vars(diel))
+
+dive_r <- dive %>% 
+  mutate(max_dep = max_dep*-1)
+
+# dive_lyrs <- dive_r %>% 
+#   group_by(id, hourly, lon, lat, max_dep, diel) %>% 
+#   reframe(max_bin = max(hunt_bin_freq),
+#             hunt_bins = hunt_bins[hunt_bin_freq == max_bin]
+#             ) %>% 
+#   mutate(hunt_bins = hunt_bins*-1) %>% 
+#   drop_na(hourly)
+
+# dive_lyrs <- dive_r
+
+dive_hrs <- data.frame(date = seq.POSIXt(first(dive_r$date), 
+                                            last(dive_r$date),
+                                            by = "hour"
+                                            ),
+                       id = dive_r$id[1],
+                       lon = NA,
+                       lat = NA
+                       )
+
+# dive_lyrs <- dive_lyrs %>% 
+#   full_join(dive_hrs) %>% 
+#   arrange(date)
+
+locs <- setDT(locs)
+# locs$hourly <- locs$date
+locs_sub <- locs[id==locs_max]
+
+# dive_lyrs <- setDT(dive_lyrs)
+# 
+# dive_lyrs[is.na(lon), lon:=locs_sub[.SD,on="date",roll="nearest",x.lon]]
+# dive_lyrs[is.na(lat), lat:=locs_sub[.SD,on="date",roll="nearest",x.lat]]
+
+dive_hrs <- setDT(dive_hrs)
+
+dive_hrs[, lon:=locs_sub[.SD,on="date",roll="nearest",x.lon]]
+dive_hrs[, lat:=locs_sub[.SD,on="date",roll="nearest",x.lat]]
+
+dive_lyrs <- dive_hrs
+
+wind = 24 # hours
+an = function(n, len) c(seq.int(n), rep(n, len-n))
+n = an(wind, nrow(dive_lyrs))
+
+dive_lyrs <- dive_lyrs %>% 
+  mutate(bathy = extract(x = bathy,
+                         y = cbind(.$lon, .$lat))[,1],
+         dep_zone = ifelse(bathy < -2000, 1, 0),
+         dep_empty = ifelse(!is.na(bathy), 1, NA),
+         dep_zone = ifelse(frollsum(dep_zone, 
+                                    n, 
+                                    adaptive = TRUE, 
+                                    na.rm = TRUE
+                                    )/frollsum(
+                                      dep_empty, 
+                                      n, 
+                                      adaptive = TRUE, 
+                                      na.rm = TRUE) >= 0.5,
+                          "pelagic",
+                          "shelf")
+         # dep_zone = frollsum(dep_zone, n, adaptive = TRUE, na.rm = TRUE)/frollsum(dep_empty, n, adaptive = TRUE, na.rm = TRUE)
+         )
+dive_lyrs$chunk_id <- paste(dive_lyrs$dep_zone, 
+                            cumsum(dive_lyrs$dep_zone != lag(dive_lyrs$dep_zone, 
+                                                             default = first(dive_lyrs$dep_zone))
+                                   ), sep = "_")
+
+dep_zone_df <- dive_lyrs %>% 
+  group_by(chunk_id, dep_zone) %>% 
+  drop_na(date, dep_zone) %>% 
+  summarise(xmin = date[1],
+            xmax = date[n()],
+            .groups = "drop")
+  
+  
+# df$chunk_id <- paste(df$type, cumsum(df$type != lag(df$type, default = first(df$type))), sep = "_")
+# dive_lyrs[, chunk_id := paste("dep_zone", cumsum(shift("dep_zone", fill = first(type) != type)), sep = "_")]
+
+bathy_dive <- dive_lyrs %>% 
+  select(date, bathy) %>% 
+  na.omit
+  
+dep_lim <- dive_r %>% 
+  pull(max_dep) %>% range(na.rm=T)
+
+g_lyr <- ggplot(dive_r %>% drop_na(max_dep)) +
+    # geom_area(data = bathy_dive, 
+    #           mapping = aes(x = hourly,
+    #                       y = bathy),
+    #           colour = "goldenrod3",
+    #           fill = "grey50",
+    #           outline.type = "lower") +
+  geom_rect(data = dep_zone_df,
+            mapping = aes(xmin = xmin,
+                          xmax = xmax,
+                          fill = dep_zone),
+            ymin = dep_lim[1]*1.5,
+            ymax = dep_lim[2]*1.5,
+            alpha = 0.3) +
+  scale_fill_brewer(type = "qual", name = "Depth zone") +
+  geom_ribbon(data = bathy_dive, 
+              mapping = aes(x = date,
+                          ymin = min(bathy, na.rm=T),
+                          ymax = bathy),
+              colour = "goldenrod3",
+              fill = "grey70",
+              alpha = 0.6,
+              outline.type = "upper") +
+  # geom_smooth(mapping = aes(x = hourly,
+  #                           y = hunt_bins)) +
+  # geom_point(data = ctd,
+  #            aes(x = date,
+  #                y = depth*-1,
+  #                colour = temp)) +
+    new_scale_fill() +
+  geom_raster(data = ctd_ag,
+              aes(x = day,
+                  y = dep_bin, 
+                  fill = temp)
+              ) +
+
+  scale_fill_cmocean(name = "thermal") +
+  geom_point(aes(x = date,
+                  y = max_dep
+                 #  colour = scales::oob_squish(max_bin, c(0,200)),
+                 # size = scales::oob_squish(max_bin, c(0,200))
+                  ),
+             size = 0.5,
+             colour = "grey30",
+             alpha = 0.5,
+              show.legend = F) +
+  scale_size(range = c(0.01, 1.0)) +
+  xlab("Date") + ylab("Depth (m)") +
+
+  scale_colour_cmocean(name = "dense") +
+  facet_grid(rows = vars(diel)) +
+  coord_cartesian(ylim = dep_lim,
+                  expand = F) +
+  theme_bw()
+  
+g_lyr
+
+
+
+
+library(orsifronts)
+library(scales)
+# orsi <- orsifronts::orsifronts %>% 
+#   fortify
+
+# g_dep <- ggplot(dive_r) +
+#   geom_polygon(data = rnaturalearthhires::countries10 %>% fortify(),
+#                aes(x = long,
+#                    y = lat,
+#                    group = group),
+#                fill = "grey",
+#                colour = NA
+#                ) +
+#   geom_path(aes(x = lon, y = lat, colour = max_dep)) +
+#   scale_color_cmocean(name = "dense")  +
+#   geom_path(data = orsi,
+#             aes(x = long,
+#                 y = lat,
+#                 group = group),
+#             colour = "orange") +
+#   # coord_map() 
+#   
+#   coord_map(xlim = xlim,
+#             ylim = ylim)
+
+g_path <- ggplot(dive_lyrs) +
+  geom_polygon(data = rnaturalearthhires::countries10 %>% fortify(),
+               aes(x = long,
+                   y = lat,
+                   group = group),
+               fill = "grey",
+               colour = NA
+               ) +
+  geom_path(aes(x = lon, 
+                y = lat, 
+                group = chunk_id, 
+                colour = dep_zone),
+            lwd = 1) +
+  # scale_color_viridis_c(trans = "date", labels = label_date(format = "%b %Y"))  +
+  scale_colour_brewer(type = "qual", name = "Depth zone") +
+  # coord_map() 
+  
+  coord_map(xlim = xlim,
+            ylim = ylim)
+
+# g_date
+
+ggsave(plot = (g_lyr + g_path + plot_layout(widths = c(4/5,1/5)) + plot_annotation(paste0(dive_lyrs$id[1]))), filename = paste0("./K-Axis_seal_tracks/",dive_r$id[1],".png"), 
+       dpi = 300, width = 14, height = 14)
+}
+```
+
+
+```{r}
+
+```
+
+<!-- Plotting it for a smaller window of time -->
+
+<!-- ```{r} -->
+<!-- library(patchwork) -->
+<!-- library(cmocean) -->
+
+<!-- dive_r_backup <- dive_r -->
+
+<!-- dive_r <- dive_r %>%  -->
+<!--   filter(between(hourly, as.POSIXct("2017-07-01", tz = "UTC"), as.POSIXct("2017-10-01", tz = "UTC"))) -->
+
+<!-- g1 <- ggplot(dive_r %>% filter(hunt_bin_freq > 30)) + -->
+<!--   geom_raster(aes(x = hourly, -->
+<!--                   y = hunt_bins*-1, -->
+<!--                   fill = scales::oob_squish(hunt_bin_freq, c(0,200)) -->
+<!--                   ), -->
+<!--               show.legend = F) + -->
+<!--   scale_fill_cmocean(name = "curl") -->
+
+<!-- g1 -->
+
+<!-- g2 <- ggplot(dive_r) + -->
+<!--   geom_path(aes(x = hourly, -->
+<!--                   y = lat -->
+<!--                   ), -->
+<!--               show.legend = F) -->
+
+<!-- g3 <- ggplot(dive_r) + -->
+<!--   geom_path(aes(x = hourly, -->
+<!--                   y = lon -->
+<!--                   ), -->
+<!--               show.legend = F) -->
+
+<!-- g1/g2/g3 -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- library(orsifronts) -->
+<!-- library(scales) -->
+<!-- orsi <- orsifronts::orsifronts %>%  -->
+<!--   fortify -->
+
+<!-- g_dep <- ggplot(dive_r) + -->
+<!--   geom_polygon(data = rnaturalearthhires::countries10 %>% fortify(), -->
+<!--                aes(x = long, -->
+<!--                    y = lat, -->
+<!--                    group = group), -->
+<!--                fill = "grey", -->
+<!--                colour = NA -->
+<!--                ) + -->
+<!--   geom_path(aes(x = lon, y = lat, colour = max_dep)) + -->
+<!--   scale_color_cmocean(name = "dense")  + -->
+<!--   geom_path(data = orsi, -->
+<!--             aes(x = long, -->
+<!--                 y = lat, -->
+<!--                 group = group), -->
+<!--             colour = "orange") + -->
+<!--   # coord_map()  -->
+
+<!--   coord_map(xlim = xlim, -->
+<!--             ylim = ylim) -->
+
+<!-- g_date <- ggplot(dive_r) + -->
+<!--   geom_polygon(data = rnaturalearthhires::countries10 %>% fortify(), -->
+<!--                aes(x = long, -->
+<!--                    y = lat, -->
+<!--                    group = group), -->
+<!--                fill = "grey", -->
+<!--                colour = NA -->
+<!--                ) + -->
+<!--   geom_path(aes(x = lon, y = lat, colour = as.Date(hourly))) + -->
+<!--   scale_color_viridis_c(trans = "date", labels = label_date(format = "%b %Y"))  + -->
+<!--   # coord_map()  -->
+
+<!--   coord_map(xlim = xlim, -->
+<!--             ylim = ylim) -->
+
+<!-- g_dep + g_date -->
+<!-- ``` -->
+
+
+<!-- Get subsurface climatological information from quantarcticR -->
+<!-- ```{r} -->
+<!-- library(quantarcticR) -->
+<!-- library(raster) -->
+<!-- quant_df <- qa_datasets() %>% data.frame -->
+<!-- temp_500_w <- qa_get("Temperature (500m, Winter)", quant_df$main_file[which(quant_df$layername %in% "Temperature (500m, Winter)")]) -->
+<!-- temp_500_s <- qa_get("Temperature (500m, Summer)", quant_df$main_file[which(quant_df$layername %in% "Temperature (500m, Summer)")]) -->
+
+<!-- oxy_500_w <- qa_get("Oxygen (500m, Winter)", quant_df$main_file[which(quant_df$layername %in% "Oxygen (500m, Winter)")]) -->
+<!-- oxy_500_s <- qa_get("Oxygen (500m, Summer)", quant_df$main_file[which(quant_df$layername %in% "Oxygen (500m, Summer)")]) -->
+
+<!-- sal_500_w <- qa_get("Salinity (500m, Winter)", quant_df$main_file[which(quant_df$layername %in% "Salinity (500m, Winter)")]) -->
+<!-- sal_500_s <- qa_get("Salinity (500m, Summer)", quant_df$main_file[which(quant_df$layername %in% "Salinity (500m, Summer)")]) -->
+
+<!-- {par(mfrow=c(3,2)) -->
+<!-- plot(temp_500_s);plot(temp_500_w); -->
+<!-- plot(oxy_500_s);plot(oxy_500_w); -->
+<!-- plot(sal_500_s);plot(sal_500_w) -->
+<!-- } -->
+
+<!-- ``` -->
+
+
