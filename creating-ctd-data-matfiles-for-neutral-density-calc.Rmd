@@ -36,10 +36,9 @@ ctd_files <- dir_ls("../Data/IMOS_MEOP_QC/MEOP_2024-03-08/", glob = "*all_prof.n
 
 suppressMessages(
 all_profs_long <- lapply(ctd_files, function(ctdfile){
-  # ctdfile <- "AUSTRALIA/DATA/ct85-254-12_all_prof.nc"
-  
+
   con <- tidync(ctdfile) # read in netcdf data
-  trace_id <- which(ctd_files == ctdfile)
+  trace_id <- which(ctd_files == ctdfile) # index number of current file (for troubleshooting)
   conattr <- nc_atts(ctdfile) # read in attribute data
   id <- conattr$value$smru_platform_code # scrub platform id
   species <- conattr$value$species # scrub species id
@@ -49,7 +48,7 @@ all_profs_long <- lapply(ctd_files, function(ctdfile){
     activate("D12,D8") %>%
     hyper_array()
     
-  pres <- nc_vals$PRES_INTERP #%>% as.double() # get vector of pressure (depths)
+  pres <- nc_vals$PRES_INTERP # as.double() # get vector of pressure (depths)
 
   if(species %in% species_of_interest &
      !is.na(ncol(pres))){
@@ -87,17 +86,7 @@ all_profs_long <- lapply(ctd_files, function(ctdfile){
                   nrow = nrow(pres),
                   ncol = length(lat),
                   byrow = TRUE)
-    # date <- as.numeric(loc_time$JULD)*24*60*60 
-    # date <- date %>% as.POSIXct(origin = as.POSIXct("1950-01-01 00:00:00", tz = "UTC"), tz = "UTC")
-    # 
-    # n_profile <- attr(nc_vals, "transforms")$N_PROF$N_PROF %>% as.character()
-    # 
-    # loc_date <- data.frame(n_profile, date, lon, lat, species)
-    # 
-    # temp_sal <- temp_sal %>% 
-    #   left_join(loc_date) %>% 
-    #   # na.omit()
-    #   filter_at(vars(temp,sal),any_vars(!is.na(.)))
+
     save_abbr <- species_abbr[species_of_interest == species]
     writeMat(paste0(out_dir,"/ctd_profiles_",save_abbr,"_",id,".mat"), 
              temperature = temp, 
@@ -108,8 +97,5 @@ all_profs_long <- lapply(ctd_files, function(ctdfile){
   }
 })
 )
-# all_profs_long <- bind_rows(all_profs_long)
-# 
-# data.table::fwrite(all_profs_long, "../../Data/CTD_profiles/previous_MEOP_release/all_previous_MEOP_ctd_profiles_interp_long.csv")
 
 ```
