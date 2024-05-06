@@ -1,0 +1,140 @@
+---
+title: "Creating trial dataset for neutral density calc"
+author: "David Green"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r}
+library(data.table)
+library(bread)
+library(tidyverse)
+library(patchwork)
+library(ncdf4)
+library(R.matlab)
+```
+
+# Step 1: Read in dataset for single seal "ct164-502-21"
+
+```{r}
+
+id <- "ct164-502-21"
+  
+suppressWarnings(
+ctd <- tryCatch(
+  expr = {
+    if(as.numeric(substr(dive$date[1],1,4))<2018){
+      bfilter("../Data/CTD_profiles/previous_MEOP_release/all_previous_MEOP_ctd_profiles_interp_long.csv",
+              patterns = id,
+              filtered_columns = "id")
+      }else{
+        bfilter("../Data/CTD_profiles/new_MEOP_release/all_new_MEOP_ctd_profiles_interp_long.csv",
+                patterns = id,
+                filtered_columns = "id")
+      }
+  },
+  error = function(e){
+  return(NULL)
+}
+)
+)
+
+```
+
+# Check that the data look ok
+
+```{r}
+
+g_temp <- ggplot(ctd,
+                 aes(x = date,
+                     y = depth,
+                     colour = temp)) +
+  geom_point(pch = 0.5) +
+  scale_colour_viridis_c(option = "inferno") +
+  scale_y_reverse()
+
+g_sal <- ggplot(ctd,
+                 aes(x = date,
+                     y = depth,
+                     colour = sal)) +
+  geom_point(pch = 0.5) +
+  scale_colour_viridis_c(option = "viridis") +
+  scale_y_reverse()
+
+g_temp + g_sal  
+
+```
+
+# Create matrices of temp and salinity with depth as rows and profile as columns
+
+```{r}
+
+temp_wide <- ctd %>% 
+  select(n_profile, temp, depth) %>% 
+  pivot_wider(names_from = n_profile,
+              values_from = temp) %>% 
+  select(-depth) %>% 
+  as.matrix()
+
+sal_wide <- ctd %>% 
+  select(n_profile, sal, depth) %>% 
+  pivot_wider(names_from = n_profile,
+              values_from = sal) %>% 
+  select(-depth) %>% 
+  as.matrix()
+
+lonlat <- ctd %>% 
+  select(n_profile, lon, lat) %>% 
+  distinct()
+
+lon <- lonlat %>% pull(lon)
+
+lat <- lonlat %>% pull(lat)
+
+pres <- ctd %>% pull(depth) %>% unique()
+
+# write data as matlab file
+
+writeMat("ctd_profiles_seal-ct164-502-21.mat", temperature = temp_wide, salinity = sal_wide, p = pres, lat = lat, lon = lon)
+
+```
+Viewing output from the calc
+```{r}
+
+n_dens <- readMat("../Data/neutral_density/ses_vertical/ctd_profiles_seal-ct164-502-21-gamma.mat")
+
+```
+
+Convert data into netcdf
+
+# ```{r}
+# 
+# # Define your matrices and vectors
+# # Assuming temperature, salinity, longitude, latitude, and pressure are already defined
+# # temp_matrix, sal_matrix, lon_vector, lat_vector, pressure_vector
+# 
+# # Create a new NetCDF file
+# ncfile <- nc_create("ctd_profiles_seal-ct164-502-21.nc", list(
+#   nc_dim("longitude", length(lon_vector)),
+#   nc_dim("latitude", length(lat_vector)),
+#   nc_dim("pressure", length(pressure_vector))
+# ))
+# 
+# # Define variables
+# ncvar_def(name = "temperature", units = "DegreesC", dim = c(ncfile$dim$longitude, ncfile$dim$latitude, ncfile$dim$pressure), missval = -999)
+# ncvar_def(name = "salinity", units = "PSU", dim = c(ncfile$dim$longitude, ncfile$dim$latitude, ncfile$dim$pressure), missval = -999)
+# 
+# # Add coordinate variables
+# ncvar_put(ncfile, ncvar_def("longitude", "degrees_east", ncfile$dim$longitude), lon_vector)
+# ncvar_put(ncfile, ncvar_def("latitude", "degrees_north", ncfile$dim$latitude), lat_vector)
+# ncvar_put(ncfile, ncvar_def("pressure", "dbar", ncfile$dim$pressure), pressure_vector)
+# 
+# # Write data
+# ncvar_put(ncfile, "temperature", temp_matrix)
+# ncvar_put(ncfile, "salinity", sal_matrix)
+# 
+# # Close the file to write changes to disk
+# nc_close(ncfile)
+# 
+# 
+# ```
