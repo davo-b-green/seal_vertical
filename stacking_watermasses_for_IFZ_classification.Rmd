@@ -1,0 +1,179 @@
+---
+title: "stacking_watermasses_for_IFZ_classification"
+author: "David Green"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(terra)
+library(ncdf4)
+library(stars)
+library(sf)
+library(tidyverse)
+library(sfheaders)
+library(fs)
+library(tidync)
+library(ncmeta)
+library(cmocean)
+library(R.matlab)
+library(patchwork)
+library(data.table)
+library(ggnewscale)
+library(CCAMLRGIS)
+library(rcartocolor)
+library(patchwork)
+library(rnaturalearthhires)
+library(scales)
+```
+
+```{r}
+fls <- dir_ls("../Data/matfiles_neutral_density_calc/gamma_mats/", glob = "*wm_profiles*.mat")
+
+# ii <- dir_ls("../Data/matfiles_neutral_density_calc/gamma_mats/", glob = "*wm_profiles_ct11-10064-05.mat")
+
+profs_stacked_wm <- data.frame()
+prof_detailed_wm <- data.frame()
+for(ii in fls){
+  
+  seal <- last(str_split(ii, pattern = "/")[[1]])
+  seal <- str_remove(seal, pattern = ".mat")[[1]]
+  seal <- str_remove(seal, pattern = "wm_profiles_")[[1]]
+  print(seal)
+  suppressMessages({
+  mat_dat <- readMat(ii)
+  # wm_profiles_ct112-033-14.mat
+  # Also let's read in some additional data - particularly profile dates
+  fl <- dir_ls("../Data/matfiles_neutral_density_calc/", glob = paste0("*",seal,"*.mat"))
+  date_dat <- readMat(fl)
+  da <- as.POSIXct(as.numeric(date_dat$date), origin = date_dat$origin, tz = "UTC")
+  
+  da <- data.frame(date = da,
+                   n_prof = 1:length(da),
+                   lon = as.numeric(date_dat$lon[1,]),
+                   lat = as.numeric(date_dat$lat[1,]))
+  
+  da <- as.data.table(da)
+  # setDT(da)
+  # da <- data.table(date = da)
+  
+  
+  da$day <- strftime(da$date, format = "%Y-%m-%d", tz = "UTC")
+  setkey(da, date)
+  # str(mat_dat)
+  
+  # Let's call the water mass classifications
+  
+  prof_wm <- mat_dat$wm
+  da <- subset(da, n_prof <= ncol(prof_wm))
+  
+  # grab the temp, salinity and gamma data
+  prof_gam <- mat_dat$gamma.n
+  prof_temp <- mat_dat$temperature
+  prof_sal <- mat_dat$salinity
+  
+  #image(prof_wm)
+  
+  # # Now for plotting against dive behaviour, it would be good to have profiles set up by date
+  # 
+  # mode<-function(y){if(all(na.omit(y)==0)){return(NaN)}else{return(which.max(tabulate(y)))}}
+  # 
+  # day_wm <- lapply(unique(da$day), function(x){
+  #   # print(x)
+  #   mat_sub <- prof_wm[,which(da$day == x)]
+  #   if(is.null(dim(mat_sub))){
+  #     return(mat_sub)
+  #   }else{
+  #     mat_sub <- apply(mat_sub, 1, mode)
+  #   }
+  #   
+  # })
+  # 
+  # day_wm <- do.call(cbind,day_wm)
+  # 
+  # Create water mass data.frame
+  wm_r <- data.frame(prof_wm) 
+  rownames(wm_r) <- as.character(1:1000)
+  colnames(wm_r) <- da$date
+  wm_r <- wm_r[,which(!duplicated(names(wm_r)))]
+  # Create gamma data.frame
+  gam_r <- data.frame(prof_gam) 
+  rownames(gam_r) <- as.character(1:1000)
+  colnames(gam_r) <- da$date
+  gam_r <- gam_r[,which(!duplicated(names(gam_r)))]
+  # Create temperature data.frame
+  temp_r <- data.frame(prof_temp) 
+  rownames(temp_r) <- as.character(1:1000)
+  colnames(temp_r) <- da$date
+  temp_r <- temp_r[,which(!duplicated(names(temp_r)))]
+  # Create salinity data.frame
+  sal_r <- data.frame(prof_sal) 
+  rownames(sal_r) <- as.character(1:1000)
+  colnames(sal_r) <- da$date
+  sal_r <- sal_r[,which(!duplicated(names(sal_r)))]
+  
+  #
+  da <- da[which(!duplicated(da$date)),]
+  da$date <- as.character(da$date)
+  
+  #
+  wm_r <- wm_r %>% 
+    
+    mutate(depth = row_number()) %>% 
+    pivot_longer(cols = -depth,
+                 names_to = "date",
+                 values_to = "water_mass") %>% 
+    mutate(#date = as.POSIXct(date, tz = "UTC"),
+           water_mass = factor(water_mass, levels = 1:9, labels = c("LCDW", "UCDW", "MCDW", "AASW", "AASW_sfp", "CDW-s", "AAIW", "SAMW", "SASW"))) %>% 
+    left_join(da) %>% 
+    arrange(date, n_prof)
+  
+  # Now for gamma
+  gam_r <- gam_r %>% 
+    
+    mutate(depth = row_number()) %>% 
+    pivot_longer(cols = -depth,
+                 names_to = "date",
+                 values_to = "gamma") %>% 
+    left_join(da) %>% 
+    arrange(date, n_prof)
+  
+  temp_r <- temp_r %>% 
+    
+    mutate(depth = row_number()) %>% 
+    pivot_longer(cols = -depth,
+                 names_to = "date",
+                 values_to = "temperature") %>% 
+    left_join(da) %>% 
+    arrange(date, n_prof)
+  
+  sal_r <- sal_r %>% 
+    
+    mutate(depth = row_number()) %>% 
+    pivot_longer(cols = -depth,
+                 names_to = "date",
+                 values_to = "salinity") %>% 
+    left_join(da) %>% 
+    arrange(date, n_prof)
+  
+  gam_r <- left_join(gam_r, temp_r) %>% 
+    left_join(sal_r)
+  #
+  wm_r <- left_join(wm_r, gam_r) %>% 
+    drop_na(gamma)
+  #
+  wm_ifz <- wm_r %>% 
+    group_by(day, date, n_prof, lon, lat) %>% 
+    summarise(wm_stack = paste(unique(water_mass), collapse = " | ")) %>% 
+    mutate(id = seal)
+  # r_dat <- data.frame(crds(dens_r),
+  #                     dens = as.numeric(vals(dens_r)))
+  
+  prof_detailed_wm <- rbind(prof_detailed_wm, wm_r)
+  profs_stacked_wm <- rbind(profs_stacked_wm, wm_ifz)
+  })
+}
+
+fwrite(profs_stacked_wm, "../Data/profiles_wm-stacked_for_IFZ-classification.csv")
+fwrite(prof_detailed_wm, "../Data/detailed_wm-classification_for-all-profiles.csv")
+```
